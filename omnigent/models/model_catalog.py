@@ -1128,20 +1128,22 @@ def list_models_for_worker(
     if provider.kind == DATABRICKS_KIND:
         uc_key = ("uc", *_listing_cache_key(provider))
         with _listing_cache_lock:
-            cached = cast(ModelListing | None, _listing_cache.get(uc_key))
-        if cached is not None:
-            listing = cached
-        else:
+            uc_listing = cast(ModelListing | None, _listing_cache.get(uc_key))
+        if uc_listing is None:
             try:
-                listing = _fetch_databricks_uc_listing(provider, transport=transport)
+                uc_listing = _fetch_databricks_uc_listing(provider, transport=transport)
                 with _listing_cache_lock:
-                    _listing_cache[uc_key] = listing
+                    _listing_cache[uc_key] = uc_listing
             except (httpx.HTTPError, OSError):
                 _logger.debug(
                     "UC model listing failed for Databricks provider, falling back",
                     exc_info=True,
                 )
-                listing = _listing_for_provider(provider, transport=transport)
+        listing = (
+            _with_custom_serving_endpoints(uc_listing, provider, transport=transport)
+            if uc_listing is not None
+            else _listing_for_provider(provider, transport=transport)
+        )
     else:
         listing = _listing_for_provider(provider, transport=transport)
     canonical_harness = (harness or "").lower().replace("-", "").replace("_", "")
@@ -1588,6 +1590,33 @@ def _fetch_databricks_listing(
             f"(profile {provider.profile or 'DEFAULT'!r})"
         ),
     )
+
+
+def _with_custom_serving_endpoints(
+    listing: ModelListing,
+    provider: ResolvedModelProvider,
+    *,
+    transport: httpx.BaseTransport | None,
+) -> ModelListing:
+    """Add the workspace's custom LLM serving endpoints to a model-services listing.
+
+    Model services cover only the ``system.ai`` foundation models; customer-created
+    serving endpoints appear only in the serving-endpoints listing. Its foundation
+    entries are dropped because the model-services listing already names them.
+
+    :param listing: The Unity Catalog model-services listing.
+    :param provider: A ``kind="databricks"`` provider descriptor.
+    :param transport: Optional httpx transport override for tests.
+    :returns: *listing*, extended with any custom endpoints.
+    """
+    endpoints = _listing_for_provider(provider, transport=transport)
+    listed = {model.id for model in listing.models}
+    custom = tuple(
+        model
+        for model in endpoints.models
+        if not is_databricks_model_id(model.id) and model.id not in listed
+    )
+    return replace(listing, models=(*listing.models, *custom)) if custom else listing
 
 
 def _fetch_databricks_uc_listing(

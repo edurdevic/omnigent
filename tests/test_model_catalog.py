@@ -930,6 +930,43 @@ def test_pi_filter_drops_unsupported_models_case_insensitively(
     assert {m.id for m in listing.models} == {"system.ai.claude-sonnet-4-6"}
 
 
+def test_custom_serving_endpoints_join_the_model_services_listing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A customer-created LLM endpoint stays listed beside the model services.
+
+    Model services cover only ``system.ai`` foundation models, so the
+    serving-endpoints listing still supplies custom endpoints; its foundation
+    entries must not duplicate the model services.
+
+    :param monkeypatch: Pytest monkeypatch fixture.
+    :param tmp_path: Per-test temp dir.
+    """
+    _isolate_config(monkeypatch, tmp_path, _DATABRICKS_DEFAULT_CONFIG)
+    _stub_workspace_creds(monkeypatch)
+    model_services = {
+        "model_services": [_uc_service("system.ai.claude-sonnet-4-6", ["anthropic/v1/messages"])]
+    }
+    serving_endpoints = {
+        "endpoints": [
+            {"name": "databricks-claude-sonnet-4-6", "task": "llm/v1/chat"},
+            {"name": "acme-claude-proxy", "task": "llm/v1/chat"},
+        ]
+    }
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        """Serve both workspace listings."""
+        if request.url.path == "/api/2.0/serving-endpoints":
+            return httpx.Response(200, json=serving_endpoints)
+        return httpx.Response(200, json=model_services)
+
+    listing = list_models_for_worker(
+        _worker_spec("claude-native"), "claude-native", transport=httpx.MockTransport(_handler)
+    )
+
+    assert [m.id for m in listing.models] == ["system.ai.claude-sonnet-4-6", "acme-claude-proxy"]
+
+
 def test_databricks_listing_skips_explicitly_non_ready_endpoints(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -1515,9 +1552,10 @@ def test_listing_cached_within_ttl_and_refetched_after_expiry(
     """Repeat enumerations replay from the TTL cache until expiry.
 
     A fan-out turn calls the tool/gate repeatedly; without the cache
-    every call would re-hit the provider API. The fake timer proves the
-    fetch is wired THROUGH the cache (count stays 1) and that expiry
-    re-fetches (count becomes 2).
+    every call would re-hit the provider API. The fake timer proves both
+    workspace listings (model services and serving endpoints) are wired
+    THROUGH the cache (count stays 2) and that expiry re-fetches them
+    (count becomes 4).
 
     :param monkeypatch: Pytest monkeypatch fixture.
     :param tmp_path: Per-test temp dir.
@@ -1533,14 +1571,14 @@ def test_listing_cached_within_ttl_and_refetched_after_expiry(
 
     first = list_models_for_worker(_worker_spec("pi"), "pi", transport=transport)
     second = list_models_for_worker(_worker_spec("pi"), "pi", transport=transport)
-    # One fetch served both calls — the second replayed from the cache.
-    assert len(requests_seen) == 1
+    # One fetch per listing served both calls — the second replayed from the cache.
+    assert len(requests_seen) == 2
     assert [m.id for m in second.models] == [m.id for m in first.models]
 
     now["t"] = 301.0
     list_models_for_worker(_worker_spec("pi"), "pi", transport=transport)
-    # Past the TTL the cache entry expired and the provider was re-hit.
-    assert len(requests_seen) == 2
+    # Past the TTL both cache entries expired and the provider was re-hit.
+    assert len(requests_seen) == 4
 
 
 def test_listing_failure_reported_and_not_cached(
