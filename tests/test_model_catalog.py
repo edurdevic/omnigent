@@ -818,6 +818,7 @@ def _databricks_transport(
                 "system.ai.gpt-5-4", ["mlflow/v1/chat/completions", "openai/v1/responses"]
             ),
             _uc_service("system.ai.gpt-responses-only", ["openai/v1/responses"]),
+            _uc_service("system.ai.gpt-5-6-sol", ["codex/v1/responses"]),
             _uc_service("system.ai.meta-llama-3-3-70b-instruct", ["mlflow/v1/chat/completions"]),
             _uc_service("system.ai.qwen3-embedding", ["mlflow/v1/embeddings"]),
         ]
@@ -876,6 +877,7 @@ def test_databricks_listing_filters_to_llm_wire_surfaces(
         "system.ai.claude-sonnet-4-6",
         "system.ai.gpt-5-4",
         "system.ai.gpt-responses-only",
+        "system.ai.gpt-5-6-sol",
         "system.ai.meta-llama-3-3-70b-instruct",
     }
     assert by_id["system.ai.claude-sonnet-4-6"].family == "claude"
@@ -888,6 +890,11 @@ def test_databricks_listing_filters_to_llm_wire_surfaces(
         {ModelWireAPI.OPENAI_CHAT, ModelWireAPI.OPENAI_RESPONSES}
     )
     assert by_id["system.ai.gpt-responses-only"].metadata.wire_apis == frozenset(
+        {ModelWireAPI.OPENAI_RESPONSES}
+    )
+    # The Codex Responses marker is the same wire; dropping it would hide
+    # Codex-only services such as Sol from Smart Routing.
+    assert by_id["system.ai.gpt-5-6-sol"].metadata.wire_apis == frozenset(
         {ModelWireAPI.OPENAI_RESPONSES}
     )
 
@@ -968,7 +975,7 @@ def test_databricks_listing_skips_explicitly_non_ready_endpoints(
         pytest.param("claude-native", {"system.ai.claude-sonnet-4-6"}, id="claude-family-only"),
         pytest.param(
             "codex-native",
-            {"system.ai.gpt-5-4", "system.ai.gpt-responses-only"},
+            {"system.ai.gpt-5-4", "system.ai.gpt-responses-only", "system.ai.gpt-5-6-sol"},
             id="openai-family-only",
         ),
         # The executor-type spelling spec_harness() yields when a spec
@@ -979,7 +986,7 @@ def test_databricks_listing_skips_explicitly_non_ready_endpoints(
         pytest.param("claude-sdk", {"system.ai.claude-sonnet-4-6"}, id="claude-sdk-spelling"),
         pytest.param(
             "codex",
-            {"system.ai.gpt-5-4", "system.ai.gpt-responses-only"},
+            {"system.ai.gpt-5-4", "system.ai.gpt-responses-only", "system.ai.gpt-5-6-sol"},
             id="codex-spelling",
         ),
         # openai-agents / openai-agents-sdk / agents_sdk outcomes are
@@ -992,6 +999,7 @@ def test_databricks_listing_skips_explicitly_non_ready_endpoints(
                 "system.ai.claude-sonnet-4-6",
                 "system.ai.gpt-5-4",
                 "system.ai.gpt-responses-only",
+                "system.ai.gpt-5-6-sol",
                 "system.ai.meta-llama-3-3-70b-instruct",
             },
             id="pi-everything",
@@ -1082,6 +1090,8 @@ def test_codex_worker_listing_keeps_glm_and_kimi_endpoints(
                 "system.ai.meta-llama-3-3-70b-instruct",
             )
         ]
+        # A service advertising only the Codex Responses marker is servable too.
+        + [_uc_service("system.ai.gpt-5-6-sol", ["codex/v1/responses"])]
     }
 
     def _handler(request: httpx.Request) -> httpx.Response:
@@ -1094,6 +1104,7 @@ def test_codex_worker_listing_keeps_glm_and_kimi_endpoints(
 
     assert {m.id for m in listing.models} == {
         "system.ai.gpt-5-5",
+        "system.ai.gpt-5-6-sol",
         "system.ai.glm-5-2",
         "system.ai.kimi-k2-6",
     }

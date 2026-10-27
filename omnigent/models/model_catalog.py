@@ -1717,7 +1717,9 @@ def fetch_databricks_model_service_entries(
         wire_apis: set[ModelWireAPI] = set()
         if any("chat/completions" in api_type for api_type in normalized_api_types):
             wire_apis.add(ModelWireAPI.OPENAI_CHAT)
-        if "openai/v1/responses" in normalized_api_types:
+        # ``codex/v1/responses`` is the Codex flavor of the same Responses
+        # wire (see ``databricks_model_discovery._CODEX_RESPONSES_API_TYPE``).
+        if normalized_api_types & {"openai/v1/responses", "codex/v1/responses"}:
             wire_apis.add(ModelWireAPI.OPENAI_RESPONSES)
         if any(
             "anthropic" in api_type and "messages" in api_type for api_type in normalized_api_types
