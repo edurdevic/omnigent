@@ -216,6 +216,20 @@ _SYSTEM_AI_MODEL_PREFIX = "system.ai."
 _VENDOR_DIRECT_PROVIDER_KINDS = frozenset({"key", "subscription"})
 
 
+def is_databricks_model_id(model: str) -> bool:
+    """
+    Whether *model* names a Databricks-served model.
+
+    :param model: A model id, e.g. ``"system.ai.gpt-5-4"``,
+        ``"databricks-gpt-5-4"`` or ``"databricks/databricks-gpt-5-4"``.
+    :returns: ``True`` for the Unity Catalog, legacy serving-endpoint and
+        ``databricks/`` provider-routed spellings, in any letter case.
+    """
+    return model.lower().startswith(
+        (_SYSTEM_AI_MODEL_PREFIX, _DATABRICKS_MODEL_PREFIX, "databricks/")
+    )
+
+
 def canonical_model_spelling(model: str) -> str:
     """
     Return the canonical (gateway-prefix-free) spelling of *model*.

@@ -55,7 +55,11 @@ from omnigent.models.model_metadata import (
     ModelMetadata,
     ModelWireAPI,
 )
-from omnigent.models.model_override import is_codex_compatible_model, model_family_mismatch
+from omnigent.models.model_override import (
+    is_codex_compatible_model,
+    is_databricks_model_id,
+    model_family_mismatch,
+)
 from omnigent.models.model_resolver import (
     ModelResolution,
     ModelResolutionError,
@@ -712,7 +716,7 @@ def _databricks_prefix_provider(spec: AgentSpec) -> ResolvedModelProvider | None
         legacy Databricks or Unity Catalog model prefix.
     """
     model = spec.executor.model
-    if isinstance(model, str) and model.startswith(("databricks-", "databricks/", "system.ai.")):
+    if isinstance(model, str) and is_databricks_model_id(model):
         return ResolvedModelProvider(
             kind=DATABRICKS_KIND,
             profile=os.environ.get("DATABRICKS_CONFIG_PROFILE"),

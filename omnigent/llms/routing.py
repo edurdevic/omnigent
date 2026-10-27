@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from omnigent.errors import ErrorCode, OmnigentError
+from omnigent.models.model_override import is_databricks_model_id
 
 # Known providers and their default base URLs.
 # API keys come from connection_params at call time (llm.connection config),
@@ -95,11 +96,6 @@ _HARNESS_FOR_MODEL_PREFIX: dict[str, str] = {
 }
 
 
-# Model-id prefixes that are served by Databricks: the legacy serving-endpoint
-# spelling and the Unity Catalog model-service spelling.
-_DATABRICKS_MODEL_PREFIXES: tuple[str, ...] = ("databricks-", "system.ai.")
-
-
 def web_search_native_passthrough_provider(
     model: str | None,
     harness: str | None,
@@ -124,7 +120,7 @@ def web_search_native_passthrough_provider(
         ``llm_provider`` (e.g. ``"openai"``), or ``None`` for
         function-tool mode.
     """
-    if not model or model.lower().startswith(_DATABRICKS_MODEL_PREFIXES):
+    if not model or is_databricks_model_id(model):
         return None
     from omnigent.harness_aliases import canonicalize_harness
     from omnigent.onboarding.provider_config import _EXECUTOR_TYPE_HARNESS_ALIASES

@@ -62,6 +62,7 @@ from omnigent.models.claude_model_vocabulary import (
     served_canonical_overrides,
 )
 from omnigent.models.model_metadata import concrete_reported_model
+from omnigent.models.model_override import is_databricks_model_id
 from omnigent.runtime.mcp_tool_result import decode_mcp_image_result
 from omnigent.spec.types import RetryPolicy
 from omnigent.util.json_serialization import json_dumps_transport_safe
@@ -1788,8 +1789,8 @@ class ClaudeSDKExecutor(Executor):
                 :data:`_CLAUDE_API_KEY_HELPER_ENV_KEY` so it reaches
                 the SDK's ``settings.apiKeyHelper`` option at turn time.
         """
-        # Fail loud: a ``databricks-*`` model requires the gateway transport.
-        if not gateway and model is not None and model.startswith("databricks-"):
+        # Fail loud: a Databricks model requires the gateway transport.
+        if not gateway and model is not None and is_databricks_model_id(model):
             raise ValueError(
                 f"Model {model!r} is a Databricks-hosted model but gateway "
                 "routing is disabled (gateway=False). "
