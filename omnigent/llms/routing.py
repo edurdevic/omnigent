@@ -95,6 +95,11 @@ _HARNESS_FOR_MODEL_PREFIX: dict[str, str] = {
 }
 
 
+# Model-id prefixes that are served by Databricks: the legacy serving-endpoint
+# spelling and the Unity Catalog model-service spelling.
+_DATABRICKS_MODEL_PREFIXES: tuple[str, ...] = ("databricks-", "system.ai.")
+
+
 def web_search_native_passthrough_provider(
     model: str | None,
     harness: str | None,
@@ -106,9 +111,10 @@ def web_search_native_passthrough_provider(
     Only OpenAI Responses-compatible harnesses (``openai-agents`` / ``codex``)
     can execute the passthrough server-side; every other harness must get the
     function-tool schema or the tool is silently dropped (the schema has no
-    ``name``). ``databricks-*`` models never use the passthrough (Databricks
-    rejects it with HTTP 400). Shared by session-setup advertisement
-    (``ToolManager._create_web_search``) and runner dispatch
+    ``name``). Databricks models -- legacy ``databricks-*`` serving endpoints
+    and Unity Catalog ``system.ai.*`` model services -- never use the
+    passthrough (Databricks rejects it with HTTP 400). Shared by session-setup
+    advertisement (``ToolManager._create_web_search``) and runner dispatch
     (``_execute_web_search_tool``) so the two sites cannot drift.
 
     :param model: The spec's ``executor.model``, or ``None``.
@@ -118,7 +124,7 @@ def web_search_native_passthrough_provider(
         ``llm_provider`` (e.g. ``"openai"``), or ``None`` for
         function-tool mode.
     """
-    if not model or model.startswith("databricks-"):
+    if not model or model.lower().startswith(_DATABRICKS_MODEL_PREFIXES):
         return None
     from omnigent.harness_aliases import canonicalize_harness
     from omnigent.onboarding.provider_config import _EXECUTOR_TYPE_HARNESS_ALIASES

@@ -115,7 +115,9 @@ def test_unknown_provider_raises() -> None:
         # Databricks-hosted GPT and plain OpenAI models → openai-agents.
         ("databricks-gpt-5-4", "openai-agents"),
         ("system.ai.gpt-5-6-sol", "openai-agents"),
+        ("databricks-glm-5-2", "openai-agents"),
         ("system.ai.glm-5-2", "openai-agents"),
+        ("databricks-kimi-k2-6", "openai-agents"),
         ("system.ai.kimi-k2-6", "openai-agents"),
         ("openai/gpt-5.4", "openai-agents"),
         ("gpt-5.4", "openai-agents"),

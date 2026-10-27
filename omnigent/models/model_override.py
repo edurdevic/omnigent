@@ -254,16 +254,18 @@ def normalize_model_for_provider(model: str, provider_kind: str | None) -> str:
     order-independent — checking first keeps error text quoting exactly
     what the caller sent). Two transforms, both prefix-mechanical:
 
-    - Databricks-gateway child + a legacy ``databricks-`` id → replace it with
-      the Unity Catalog ``system.ai.`` prefix. Bare canonical claude / gpt /
-      glm / kimi ids gain that prefix too.
+    - Databricks-gateway child + a legacy ``databricks-`` id of ANY family
+      (e.g. ``databricks-meta-llama-...``) → replace that prefix with the
+      Unity Catalog ``system.ai.`` prefix. Bare canonical claude / gpt /
+      glm / kimi ids (:data:`_MECHANICAL_VENDOR_ID_RE`) gain that prefix too.
     - Vendor-direct child (API key / CLI subscription) + a mechanically
       prefixed Databricks id → strip the prefix.
 
-    Anything non-mechanical (slash/colon/bracket shapes, families outside
-    :data:`_MECHANICAL_VENDOR_ID_RE`, gateway/local/unknown provider kinds)
-    passes through unchanged — the existing fail-loud harness/gateway error
-    remains the safety net for genuinely unroutable ids.
+    Anything else passes through unchanged: other bare ids (slash/colon/
+    bracket shapes, families outside :data:`_MECHANICAL_VENDOR_ID_RE`) and
+    gateway/local/unknown provider kinds. The existing fail-loud
+    harness/gateway error remains the safety net for genuinely unroutable
+    ids.
 
     :param model: A model id that already passed
         :func:`validate_model_override`, e.g. ``"claude-sonnet-4-6"``.
