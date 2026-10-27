@@ -11,9 +11,11 @@ from __future__ import annotations
 import click
 
 from omnigent.onboarding.sandboxes.base import (
+    OwnerCredentialMissingError,
     RemoteCommandResult,
     RemoteProcess,
     SandboxCapabilityError,
+    SandboxGoneError,
     SandboxHostLauncher,
     SandboxLauncher,
 )
@@ -41,7 +43,9 @@ from omnigent.onboarding.sandboxes.registry import (
     reset_plugin_state_for_tests,
 )
 from omnigent.onboarding.sandboxes.types import (
+    GitCloneOptions,
     HostContext,
+    RepoWorkspace,
     SandboxCapabilities,
     SandboxCommandError,
     SandboxConfigError,
@@ -54,14 +58,18 @@ __all__ = [
     "COMMUNITY_MODULE_PREFIX",
     "DEFAULT_SANDBOX_NAME",
     "DerivedWorkspace",
+    "GitCloneOptions",
     "HostContext",
+    "OwnerCredentialMissingError",
     "RemoteCommandResult",
     "RemoteProcess",
+    "RepoWorkspace",
     "SandboxCapabilities",
     "SandboxCapabilityError",
     "SandboxCommandError",
     "SandboxConfigError",
     "SandboxError",
+    "SandboxGoneError",
     "SandboxHostLauncher",
     "SandboxInfo",
     "SandboxLauncher",

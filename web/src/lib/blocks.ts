@@ -1,3 +1,4 @@
+import type { NativePermissionDelivery } from "./nativePermissionDelivery";
 // Mirrors sdks/python-client/omnigent_client/_blocks.py.
 //
 // Hand-ported. When _blocks.py changes, update this file and the
@@ -8,8 +9,11 @@
 // uses camelCase fields + a `type` discriminator string equal to the
 // Python class name lowercased (e.g. ResponseStartBlock → "response_start").
 
+import { capitalizeAgentName } from "./agentLabels";
+import { agentRootName } from "./forkHarness";
+import { nativeCodingAgentForAgentName } from "./nativeCodingAgents";
 import type { RoutingDecisionExtras } from "./routingDecision";
-import type { CodexPersistMode, RememberScope, Response } from "./types";
+import type { AgyPermission, CodexPersistMode, RememberScope, Response } from "./types";
 
 /**
  * Metadata attached to every stream block.
@@ -355,6 +359,17 @@ export interface TerminalCommandBlock {
   stderr: string | null;
 }
 
+export function isTerminalCommandInput(
+  block: AnyBlock,
+): block is TerminalCommandBlock & { kind: "input"; input: string } {
+  return (
+    block.type === "terminal_command" &&
+    block.kind === "input" &&
+    block.input !== null &&
+    block.input.trim().length > 0
+  );
+}
+
 // ── Text ─────────────────────────────────────────────────
 
 /** A flushed chunk of streamed text. */
@@ -372,6 +387,10 @@ export interface TextDone {
   hasCodeBlocks: boolean;
   /** True when this persisted assistant text came from an interrupted turn. */
   interrupted?: boolean;
+  /** UI-only marker for a provisional native preview with missing live output. */
+  previewInterrupted?: boolean;
+  /** Last native chunk index rendered in this provisional preview. */
+  streamIndex?: number;
 }
 
 // ── Reasoning ────────────────────────────────────────────
@@ -442,23 +461,78 @@ export interface ErrorBlock {
   cause?: string;
   /** Optional concrete next step to fix it, e.g. a command to run. */
   remediation?: string;
+  /**
+   * The send behind a client-only card whose POST got no answer: the message
+   * may still arrive, and its commit retracts the card. `text` is set on a
+   * native terminal, whose mirrored message carries no stable id.
+   */
+  unansweredSend?: { stableId: string; text?: string };
 }
 
 /**
  * Extract the optional structured failure fields (`title` / `cause` /
- * `remediation`) from any error-shaped source, dropping absent ones so an
- * `ErrorBlock` stays minimal when the failure wasn't classified. Spread the
- * result into an `ErrorBlock` alongside `message` / `source` / `code`.
+ * `remediation`), naming the agent for otherwise unclassified turn errors.
+ * Capture the name with the failure so later agent switches cannot relabel it.
  */
 export function structuredErrorFields(
-  src: { title?: string | null; cause?: string | null; remediation?: string | null } | null,
+  src: {
+    code?: string | null;
+    source?: string | null;
+    level?: "error" | "info";
+    title?: string | null;
+    cause?: string | null;
+    remediation?: string | null;
+  } | null,
+  agentName?: string | null,
 ): Pick<ErrorBlock, "title" | "cause" | "remediation"> {
   const out: Pick<ErrorBlock, "title" | "cause" | "remediation"> = {};
   if (src?.title) out.title = src.title;
+  if (!out.title && src?.level !== "info" && isAgentTurnError(src) && agentName?.trim()) {
+    const rootName = agentRootName(agentName.trim());
+    const displayName =
+      nativeCodingAgentForAgentName(rootName)?.displayName ?? capitalizeAgentName(rootName);
+    out.title = `${displayName} ran into an error during this turn.`;
+  }
   if (src?.cause) out.cause = src.cause;
   if (src?.remediation) out.remediation = src.remediation;
   return out;
 }
+
+function isAgentTurnError(src: { code?: string | null; source?: string | null } | null): boolean {
+  if (src?.source === "tool") return false;
+  const code = src?.code ?? "";
+  if (AGENT_TURN_ERROR_CODES.has(code)) return true;
+  // Keep specific diagnoses and infrastructure failures in their existing words.
+  if (
+    SPECIFIC_ERROR_CODES.has(code) ||
+    /^(?:runner_|host_|workspace_|terminal_|required_terminal_|native_terminal_)/.test(code)
+  ) {
+    return false;
+  }
+  return src?.source === "harness" || src?.source === "llm" || src?.source === "execution";
+}
+
+const AGENT_TURN_ERROR_CODES = new Set([
+  "native_turn_error",
+  "codex_turn_error",
+  "executor_error",
+  "unknown_error",
+  "response_failed",
+  "RuntimeError",
+]);
+
+const SPECIFIC_ERROR_CODES = new Set([
+  "connection_error",
+  "context_length_exceeded",
+  "rate_limit_exceeded",
+  "codex_thread_reset",
+  "session_agent_missing",
+  "harness_not_configured",
+  "internal_error",
+  "wrong_replica",
+  "native_policy_not_enforced",
+  "model_change_not_applied",
+]);
 
 /** The server is retrying. */
 export interface RetryBlock {
@@ -536,6 +610,9 @@ export interface ResponseEndBlock {
  * dictates as the next stream events.
  */
 export interface ElicitationBlock {
+  nativeDelivery?: NativePermissionDelivery;
+  /** Positive native resolution evidence; snapshot absence alone is insufficient. */
+  nativeDeliveryResolved?: boolean;
   type: "elicitation";
   ctx: BlockContext;
   elicitationId: string;
@@ -579,6 +656,12 @@ export interface ElicitationBlock {
    */
   response: {
     action: "accept" | "decline" | "cancel" | "auto_resolved";
+    /**
+     * Refines `auto_resolved`: `"unanswered"` means the server cleared
+     * the prompt because the hook stopped waiting before anyone
+     * answered, so the card says the prompt expired and how to resume.
+     */
+    reason?: "unanswered";
     content?: Record<string, unknown>;
     _meta?: Record<string, unknown>;
   } | null;
@@ -618,6 +701,14 @@ export interface ElicitationBlock {
    */
   allowAllEdits?: boolean;
   /**
+   * Eligible Claude-native tool prompts: when true, the card offers an
+   * "Approve & switch to auto mode" button (accept + session-scoped
+   * ``setMode(auto)``). Absent/false for all other elicitations.
+   */
+  allowAutoMode?: boolean;
+  /** Native directories the user may explicitly allow for this session. */
+  permissionDirectories?: string[];
+  /**
    * Claude-native non-edit tool prompts only: present when the card
    * should render an "Approve & don't ask again for <host|tool>" button
    * that installs a session-scoped allow rule on accept (the web
@@ -628,6 +719,12 @@ export interface ElicitationBlock {
   rememberScope?: RememberScope | null;
   /** Codex-native MCP approval persistence modes advertised by the request. */
   codexPersistModes?: CodexPersistMode[];
+  /**
+   * Agy-native permission prompts only: the action description and
+   * advertised always-allow persist pattern agy's own prompt shows, so
+   * the card can render them. Null for every other elicitation.
+   */
+  agyPermission?: AgyPermission | null;
 }
 
 /** Union of all block types. */
@@ -653,6 +750,19 @@ export type AnyBlock =
   | ElicitationBlock
   | PolicyDeniedBlock
   | ResponseEndBlock;
+
+/** Whether a pending card answers `sessionId`'s own prompt, not a mirrored sub-agent's. */
+export function hasPendingOwnElicitation(
+  blocks: readonly AnyBlock[],
+  sessionId: string | null,
+): boolean {
+  return blocks.some(
+    (b) =>
+      b.type === "elicitation" &&
+      b.status === "pending" &&
+      (b.targetSessionId == null || b.targetSessionId === sessionId),
+  );
+}
 
 /**
  * Item-id prefix marking a provisional, in-flight assistant-text block —

@@ -2,7 +2,9 @@
 
 Exposes a single ``deploy`` tool that, when called, sends an
 ``elicitation/create`` to the client asking which environment to
-deploy to.  The schema is::
+deploy to.  The schema is:
+
+.. code-block:: json
 
     {
       "type": "object",
@@ -23,6 +25,9 @@ When the bug is fixed it returns the actual selection.
 """
 
 from __future__ import annotations
+
+import os
+from pathlib import Path
 
 from mcp.server.fastmcp import Context, FastMCP
 from pydantic import BaseModel, Field
@@ -52,6 +57,12 @@ async def deploy(ctx: Context) -> str:
         when the user declines, ``"elicit_answer:none"`` when
         ``result.data`` is unexpectedly absent.
     """
+    invocation_file = os.environ.get("ELICITATION_INVOCATION_FILE")
+    if invocation_file:
+        path = Path(invocation_file)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write("deploy\n")
+
     result = await ctx.elicit(
         message="Which environment would you like to deploy to?",
         schema=_DeployTarget,

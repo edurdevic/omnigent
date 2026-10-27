@@ -16,6 +16,7 @@ sent on their behalf, because auto-fill takes the first enum value.
 from __future__ import annotations
 
 import asyncio
+import copy
 from typing import Any, cast
 
 import pytest
@@ -204,6 +205,67 @@ async def test_the_server_receives_the_option_the_person_picked() -> None:
     assert result.content == {"answer": "prod"}
 
 
+async def test_reconnect_republishes_the_same_question_with_a_fresh_id() -> None:
+    """A restart recreates presentation state without replaying the MCP tool."""
+
+    class _ReconnectServerClient:
+        def __init__(self) -> None:
+            self.bodies: list[dict[str, Any]] = []
+
+        async def post(self, url: str, json: Any = None, timeout: float = 30.0) -> Any:
+            del url, timeout
+            self.bodies.append(copy.deepcopy(json))
+            elicitation_id = f"elicit_generation_{len(self.bodies)}"
+
+            class _Resp:
+                @staticmethod
+                def raise_for_status() -> None:
+                    return None
+
+                @staticmethod
+                def json() -> dict[str, str]:
+                    return {"elicitation_id": elicitation_id}
+
+            return _Resp()
+
+    server_client = _ReconnectServerClient()
+    manager = RunnerMcpManager(server_client=cast(Any, server_client))
+    callback = manager._build_elicitation_callback()
+    params = ElicitRequestFormParams(
+        message="Which environment?", requestedSchema=cast(Any, ENV_SCHEMA)
+    )
+    task = asyncio.create_task(callback(SESSION, params))
+    try:
+        for _ in range(1000):
+            if "elicit_generation_1" in pending_approvals._pending:
+                break
+            await asyncio.sleep(0.001)
+        assert pending_approvals.notify_server_reconnect() == 1
+        for _ in range(1000):
+            if "elicit_generation_2" in pending_approvals._pending:
+                break
+            await asyncio.sleep(0.001)
+        assert pending_approvals.resolve("elicit_generation_2", True, {"answer": "prod"})
+
+        result = await task
+    finally:
+        if not task.done():
+            task.cancel()
+
+    assert result.action == "accept"
+    assert result.content == {"answer": "prod"}
+    assert server_client.bodies == [
+        {
+            "type": "mcp_elicitation",
+            "data": {"message": "Which environment?", "requestedSchema": ENV_SCHEMA},
+        },
+        {
+            "type": "mcp_elicitation",
+            "data": {"message": "Which environment?", "requestedSchema": ENV_SCHEMA},
+        },
+    ]
+
+
 async def test_a_bare_approval_still_falls_back_to_the_schema() -> None:
     """A yes/no surface collects nothing, so the guess is better than nothing.
 
@@ -226,7 +288,20 @@ async def test_a_declined_elicitation_sends_no_content() -> None:
     assert result.content is None
 
 
-async def test_the_runner_events_endpoint_carries_the_content() -> None:
+@pytest.mark.parametrize(
+    "runner_owned, elicitation_id",
+    [
+        (True, ELICIT_ID),
+        (False, "elicit_claude_" + "a" * 32),
+        (False, "elicit_codex_" + "a" * 32),
+        (False, "elicit_eval_" + "a" * 32),
+        (False, "elicit_pi_" + "a" * 32),
+    ],
+)
+@pytest.mark.parametrize("action", ["accept", "decline", "cancel"])
+async def test_runner_approval_content_and_decline_interrupt_ownership(
+    runner_owned: bool, elicitation_id: str, action: str
+) -> None:
     """The regression boundary, exercised through the real HTTP handler.
 
     Every other test here calls ``resolve`` directly, which is precisely the
@@ -239,11 +314,12 @@ async def test_the_runner_events_endpoint_carries_the_content() -> None:
     from tests.runner.conftest import _FakeProcessManager, _ScriptedHarnessClient
     from tests.runner.helpers import NullServerClient
 
+    harness_client = _ScriptedHarnessClient([])
     app = create_runner_app(
-        process_manager=cast(Any, _FakeProcessManager(_ScriptedHarnessClient([]))),
+        process_manager=cast(Any, _FakeProcessManager(harness_client)),
         server_client=cast(Any, NullServerClient()),
     )
-    parked = pending_approvals.register(ELICIT_ID)
+    parked = pending_approvals.register(elicitation_id) if runner_owned else None
     try:
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://runner") as client:
@@ -252,19 +328,28 @@ async def test_the_runner_events_endpoint_carries_the_content() -> None:
                 json={
                     "type": "approval",
                     "data": {
-                        "elicitation_id": ELICIT_ID,
-                        "action": "accept",
+                        "elicitation_id": elicitation_id,
+                        "action": action,
                         "content": {"answer": "prod"},
                     },
                 },
             )
             assert resp.status_code in (200, 204)
-        assert parked.done(), "the approval event never reached the registry"
-        assert parked.result() == pending_approvals.Verdict(
-            approved=True, content={"answer": "prod"}
+        if parked is not None:
+            assert parked.done(), "the approval event never reached the registry"
+            assert parked.result() == pending_approvals.Verdict(
+                approved=action == "accept",
+                content={"answer": "prod"} if action == "accept" else None,
+            )
+        assert [body["type"] for body in harness_client.patched_events] == (
+            ["interrupt", "approval"]
+            if action == "decline"
+            and (runner_owned or not elicitation_id.startswith("elicit_pi_"))
+            else ["approval"]
         )
+        assert harness_client.patched_events[-1]["content"] == {"answer": "prod"}
     finally:
-        pending_approvals.cleanup(ELICIT_ID)
+        pending_approvals.cleanup(elicitation_id)
 
 
 async def _elicit_with_schema(schema: dict[str, Any], resolve: Any) -> Any:

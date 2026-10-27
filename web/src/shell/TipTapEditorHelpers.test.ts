@@ -1,7 +1,87 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { Editor } from "@tiptap/core";
+import { createMarkdownDocumentExtensions } from "./markdownDocumentExtensions";
+import { installMarkdownParserPatch } from "./tiptapMarkdownPatches";
 import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
 import { findPmRangeForComment, computeSelectionData } from "./TipTapEditorHelpers";
 import type { Comment } from "@/hooks/useComments";
+
+installMarkdownParserPatch();
+
+describe("repeated words in Markdown", () => {
+  let editor: Editor | undefined;
+  afterEach(() => {
+    editor?.destroy();
+    editor = undefined;
+  });
+
+  const link = `[Details](https://example.com/${"x".repeat(2000)})`;
+  it.each([
+    ["long URL after selection", `**word** and **word** and **word**\n\n${link}`],
+    ["long URL before selection", `${link}\n\n**word** and **word** and **word**`],
+    ["headings and paragraphs", `# word\n\nword\n\nword\n\n${link}`],
+    ["lists", `- word\n- word\n- word\n\n${link}`],
+    ["blockquotes", `> word\n>\n> word\n\nword\n\n${link}`],
+    ["mixed formatting", `\`word\` **word** word\n\n${link}`],
+    ["emoji and CRLF", `😀 word\r\n\r\nword word\r\n\r\n${link}`],
+    ["task lists", `- [ ] word\n- [x] word\n- [ ] word\n\n${link}`],
+    ["tables", `| A | B |\n| --- | --- |\n| word | word |\n| word | other |\n\n${link}`],
+    ["GitHub alerts", `> [!NOTE]\n> word\n>\n> word\n\nword\n\n${link}`],
+    ["code fences", `word\n\n\`\`\`text\nword word\n\`\`\`\n\n${link}`],
+    ["link labels", `word [word](https://example.com) word\n\n${link}`],
+    ["strikethrough", `word ~~word~~ word\n\n${link}`],
+    ["substring matches", `sword word password word\n\n${link}`],
+    ["hard-wrapped prose", `word word\nword\n\n> word\n> word\n\n${link}`],
+  ])("preserves every occurrence's raw offset and highlight: %s", (_name, raw) => {
+    editor = new Editor({
+      extensions: createMarkdownDocumentExtensions("conversation", "doc.md"),
+      content: raw,
+      contentType: "markdown",
+    });
+    const doc = editor.state.doc;
+    let rawFrom = 0;
+    doc.descendants((node, pos) => {
+      if (!node.isText || !node.text) return;
+      for (let at = node.text.indexOf("word"); at !== -1; at = node.text.indexOf("word", at + 1)) {
+        const from = pos + at;
+        const expected = raw.indexOf("word", rawFrom);
+        rawFrom = expected + 4;
+        const data = computeSelectionData(from, from + 4, doc, raw, editor!.markdown);
+        expect(data).toEqual({
+          start_index: expected,
+          end_index: expected + 4,
+          anchor_content: "word",
+        });
+        // Check restore independently of capture so symmetric mistakes cannot pass.
+        const range = findPmRangeForComment(
+          doc,
+          makeComment("word", expected),
+          raw,
+          editor!.markdown,
+        );
+        expect(range).not.toBeNull();
+        if (!range) return;
+        expect(doc.textBetween(0, range.from, "\n")).toBe(doc.textBetween(0, from, "\n"));
+        expect(doc.textBetween(range.from, range.to, "\n")).toBe("word");
+      }
+    });
+    expect(rawFrom).toBe(raw.lastIndexOf("word") + 4);
+  });
+
+  it("keeps the legacy fallback without a Markdown manager when hidden text changes occurrence counts", () => {
+    const raw = "word [Details](word) word";
+    const doc = makeDoc("word Details word");
+    expect(computeSelectionData(13, 17, doc, raw)).toEqual({
+      start_index: raw.lastIndexOf("word"),
+      end_index: raw.length,
+      anchor_content: "word",
+    });
+    expect(findPmRangeForComment(doc, makeComment("word", raw.lastIndexOf("word")), raw)).toEqual({
+      from: 13,
+      to: 17,
+    });
+  });
+});
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -99,13 +179,13 @@ describe("findPmRangeForComment", () => {
     expect(result).toEqual({ from: 600, to: 603 });
   });
 
-  it("returns the first occurrence when two identical strings are within the ±500 window", () => {
-    // Both "Hello"s are within 500 chars of each other; searchFrom collapses
-    // to 0 and indexOf returns the first match regardless of the hint.
+  it("uses the nearest occurrence when two identical strings are within the search window", () => {
+    // A short selection can repeat nearby. The stored offset must win over the
+    // first match so the comment re-attaches to the selected occurrence.
     const text = "Hello, world! Hello, universe!";
     const doc = makeDoc(text);
     const result = findPmRangeForComment(doc, makeComment("Hello", 14), text);
-    expect(result).toEqual({ from: 0, to: 5 });
+    expect(result).toEqual({ from: 14, to: 19 });
   });
 
   it("falls back to the first occurrence when hint window misses", () => {
@@ -178,13 +258,13 @@ describe("computeSelectionData", () => {
     expect(result).toEqual({ start_index: 600, end_index: 603, anchor_content: "foo" });
   });
 
-  it("returns the first occurrence when duplicate strings are within the ±500 window", () => {
-    // Both "foo"s are close together; the search window starts at 0 and
-    // indexOf always finds the first match.
+  it("uses the nearest occurrence when duplicate strings are within the search window", () => {
+    // Selecting the later short duplicate must not re-attach the comment to
+    // the earlier identical text.
     const text = "foo bar foo baz";
     const doc = makeDoc(text);
     const result = computeSelectionData(8, 11, doc, text);
-    expect(result).toEqual({ start_index: 0, end_index: 3, anchor_content: "foo" });
+    expect(result).toEqual({ start_index: 8, end_index: 11, anchor_content: "foo" });
   });
 
   it("falls back to proportional indices when anchor_content is not in rawContent verbatim", () => {

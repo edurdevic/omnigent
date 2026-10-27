@@ -68,6 +68,7 @@ def test_plugin_state_loads_builtins() -> None:
     assert isinstance(state, SandboxProviderPluginState)
     assert "modal" in state
     assert "blaxel" in state
+    assert "gensee" in state
     assert "kubernetes" in state
 
 
@@ -94,6 +95,7 @@ def test_available_providers_returns_builtins() -> None:
     names = available_providers()
     assert "modal" in names
     assert "blaxel" in names
+    assert "gensee" in names
     assert "kubernetes" in names
 
 
@@ -131,6 +133,14 @@ def test_instantiate_loads_microsandbox_without_optional_sdk() -> None:
     reset_plugin_state_for_tests()
     launcher = instantiate("microsandbox")
     assert launcher.provider == "microsandbox"
+
+
+def test_instantiate_loads_gensee_from_core() -> None:
+    """Gensee resolves to the built-in launcher without a plugin package."""
+    reset_plugin_state_for_tests()
+    launcher = instantiate("gensee")
+    assert launcher.provider == "gensee"
+    assert launcher.__class__.__module__ == "omnigent.onboarding.sandboxes.gensee"
 
 
 def test_instantiate_unknown_raises() -> None:
@@ -335,3 +345,11 @@ def test_instantiate_rejects_non_launcher_class(
 
     with pytest.raises(SandboxRegistryError, match="not a SandboxHostLauncher subclass"):
         instantiate("not-a-launcher")
+
+
+def test_databricks_provider_is_builtin_and_instantiates_without_extras() -> None:
+    """Instantiating the launcher touches no SDK; it is imported on first use."""
+    reset_plugin_state_for_tests()
+    assert "databricks" in available_providers()
+    launcher = instantiate("databricks")
+    assert launcher.provider == "databricks"
