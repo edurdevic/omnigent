@@ -2853,8 +2853,9 @@ class ClaudeSDKExecutor(Executor):
         # (HTTP 400); they require "adaptive" instead (those tiers are
         # adaptive-only). Sonnet is fine, so scope to those tiers only.
         # This is Databricks-specific: it is gated on the ``databricks-
-        # claude-opus-`` / ``databricks-claude-fable-`` model prefixes, so
-        # it never fires for a generic gateway model.
+        # claude-opus-`` / ``databricks-claude-fable-`` model prefixes (and
+        # their ``system.ai.`` Unity Catalog spellings), so it never fires
+        # for a generic gateway model.
         if (
             self._gateway
             and isinstance(model, str)
